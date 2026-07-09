@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { DashboardTask, Status } from "@/lib/types";
-import { dueLabel, isOverdue, nextStatus, statusLabels, urgencyScore } from "@/lib/workflow";
+import { completedRecentlyLabel, dueLabel, isOverdue, nextStatus, statusLabels, urgencyScore } from "@/lib/workflow";
 
 type LoadState = "loading" | "ready" | "error";
 
@@ -20,23 +20,69 @@ export default function Dashboard() {
     const limit = new Date();
     limit.setDate(limit.getDate() + 3);
     const dueLimit = limit.toISOString().slice(0, 10);
+    const completedSince = new Date();
+    completedSince.setDate(completedSince.getDate() - 3);
 
-    const { data, error } = await supabase
+    const activeResult = await supabase
       .from("tasks")
       .select("*, requests(id, title, priority, status, due_date, customers(name, company))")
       .neq("status", "done")
       .lte("due_date", dueLimit)
       .order("due_date", { ascending: true });
 
-    if (error) {
-      setMessage(error.message);
+    if (activeResult.error) {
+      setMessage(activeResult.error.message);
       setState("error");
       return;
     }
 
-    const ranked = ((data ?? []) as DashboardTask[]).sort((a, b) => {
+    const activityResult = await supabase
+      .from("activities")
+      .select("entity_id, detail, created_at")
+      .eq("entity_type", "task")
+      .eq("action", "status_change")
+      .gte("created_at", completedSince.toISOString())
+      .order("created_at", { ascending: false });
+
+    if (activityResult.error) {
+      setMessage(activityResult.error.message);
+      setState("error");
+      return;
+    }
+
+    const recentDone = new Map<string, string>();
+    for (const activity of activityResult.data ?? []) {
+      const detail = activity.detail as { after?: string } | null;
+      if (detail?.after === "done" && !recentDone.has(activity.entity_id)) {
+        recentDone.set(activity.entity_id, activity.created_at);
+      }
+    }
+
+    const doneIds = Array.from(recentDone.keys());
+    const doneResult = doneIds.length
+      ? await supabase
+          .from("tasks")
+          .select("*, requests(id, title, priority, status, due_date, customers(name, company))")
+          .in("id", doneIds)
+      : { data: [], error: null };
+
+    if (doneResult.error) {
+      setMessage(doneResult.error.message);
+      setState("error");
+      return;
+    }
+
+    const activeTasks = (activeResult.data ?? []) as DashboardTask[];
+    const doneTasks = ((doneResult.data ?? []) as DashboardTask[]).map((task) => ({
+      ...task,
+      completed_at: recentDone.get(task.id),
+    }));
+
+    const ranked = [...activeTasks, ...doneTasks].sort((a, b) => {
       const aPriority = a.requests?.priority ?? "medium";
       const bPriority = b.requests?.priority ?? "medium";
+      if (a.status === "done" && b.status !== "done") return 1;
+      if (a.status !== "done" && b.status === "done") return -1;
       return urgencyScore(b, bPriority) - urgencyScore(a, aPriority);
     });
 
@@ -85,10 +131,13 @@ export default function Dashboard() {
             <p className="text-sm font-semibold uppercase tracking-[0.18em] text-indigo-600">Dashboard</p>
             <h1 className="mt-2 text-3xl font-bold text-slate-950">Pending follow-ups</h1>
             <p className="mt-2 max-w-2xl text-slate-600">
-              Open, waiting, and in-progress work due in the next 3 days or already overdue.
+              Active jobs due soon, overdue jobs, and Done jobs completed in the last 3 days.
             </p>
           </div>
           <nav className="flex gap-2">
+            <Link className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-800" href="/archive">
+              Archive
+            </Link>
             <Link className="rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white" href="/customers">
               Customers
             </Link>
@@ -145,19 +194,32 @@ export default function Dashboard() {
                     <p className="truncate text-sm text-slate-500">{task.requests?.customers?.name ?? "No customer"}</p>
                   </div>
                   <div className="hidden text-sm sm:block">
-                    <p className={isOverdue(task) ? "font-semibold text-rose-700" : "text-slate-700"}>{dueLabel(task.due_date)}</p>
+                    <p className={isOverdue(task) ? "font-semibold text-rose-700" : "text-slate-700"}>
+                      {task.status === "done" ? completedRecentlyLabel(task.completed_at) : dueLabel(task.due_date)}
+                    </p>
                     <p className="text-slate-500">{task.due_date ?? ""}</p>
                   </div>
                   <div className="hidden sm:block">
                     <span className="rounded-full bg-indigo-50 px-2 py-1 text-sm font-semibold text-indigo-700">{score}</span>
                   </div>
-                  <button
-                    className="h-10 rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-800 hover:bg-slate-50"
-                    disabled={savingId === task.id}
-                    onClick={() => cycleStatus(task)}
-                  >
-                    {savingId === task.id ? "Saving" : statusLabels[task.status]}
-                  </button>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <button
+                      className="h-10 rounded-md border border-slate-300 px-3 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                      disabled={savingId === task.id}
+                      onClick={() => cycleStatus(task)}
+                    >
+                      {savingId === task.id ? "Saving" : statusLabels[task.status]}
+                    </button>
+                    {task.status !== "done" ? (
+                      <button
+                        className="h-10 rounded-md bg-emerald-600 px-3 text-sm font-semibold text-white hover:bg-emerald-700"
+                        disabled={savingId === task.id}
+                        onClick={() => updateTaskStatus(task, "done")}
+                      >
+                        Done
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
               );
             })}

@@ -12,7 +12,7 @@ type RequestWithCustomer = RequestRecord & { customers: Customer | null };
 const blankTask: TaskInput = {
   title: "",
   assignee_name: "",
-  status: "open",
+  status: "waiting",
   due_date: "",
 };
 
@@ -265,6 +265,9 @@ export default function RequestDetailPage() {
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <button className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold" onClick={() => updateTaskStatus(task, nextStatus(task.status))}>{statusLabels[task.status]}</button>
+                    {task.status !== "done" ? (
+                      <button className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white" onClick={() => updateTaskStatus(task, "done")}>Done</button>
+                    ) : null}
                     <button className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold" onClick={() => startTaskEdit(task)}>Edit</button>
                     <button className="rounded-md border border-rose-200 px-3 py-2 text-sm font-semibold text-rose-700" onClick={() => deleteTask(task)}>Delete</button>
                   </div>

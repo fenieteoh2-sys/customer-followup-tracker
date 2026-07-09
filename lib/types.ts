@@ -1,4 +1,4 @@
-export type Status = "open" | "in_progress" | "waiting" | "done";
+export type Status = "waiting" | "open" | "in_progress" | "pending" | "done";
 export type Priority = "low" | "medium" | "high";
 
 export type Customer = {
@@ -62,6 +62,7 @@ export type Note = {
 };
 
 export type DashboardTask = TaskRecord & {
+  completed_at?: string;
   requests: {
     id: string;
     title: string;
